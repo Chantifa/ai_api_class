@@ -1,76 +1,115 @@
-import requests
-import json
-from datetime import datetime
+import openai
+import logging
+import time
+import backoff
+from typing import Optional, Dict, List, Generator
+from ratelimit import limits, sleep_and_retry
 
 class LLMSimplifier:
-    def __init__(self, api_key, base_url):
-        """Initialize the LLM API client with an API key and base URL."""
+    def __init__(self, api_key: str, provider: str = "openai",
+                 temperature: float = 0.7, max_tokens: int = 512,
+                 log_file: str = "llm_api.log"):
+        """Initialize the LLM API client with an API key, provider, and parameters."""
+        self.provider = provider.lower()
         self.api_key = api_key
-        self.base_url = base_url
-        self.headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json"
-        }
-        self.log = []  # Simple log to track requests
+        self.temperature = temperature
+        self.max_tokens = max_tokens
+        self._setup_logging(log_file)
+        self._setup_client()
+        self.call_count = 0
+        self.rate_limit_period = 60  # seconds
+        self.rate_limit_calls = 50   # calls per period
 
-    def generate_text(self, prompt, max_tokens=100, temperature=0.7):
+    def _setup_logging(self, log_file: str) -> None:
+        """Configure file-based logging for API interactions."""
+        logging.basicConfig(
+            filename=log_file,
+            level=logging.INFO,
+            format="%(asctime)s - %(levelname)s - %(message)s"
+        )
+        self.logger = logging.getLogger(__name__)
+        self.logger.info(f"Initialized LLMSimplifier for {self.provider}")
+
+    def _setup_client(self) -> None:
+        """Set up the API client based on the provider."""
+        if self.provider == "openai":
+            openai.api_key = self.api_key
+            self.client = openai
+        elif self.provider == "xai":
+            # Placeholder for xAI client setup
+            self.client = None  # Configure xAI API client
+        else:
+            raise ValueError(f"Unsupported provider: {self.provider}")
+
+    @backoff.on_exception(backoff.expo, (openai.error.RateLimitError, openai.error.APIError), max_tries=3)
+    @sleep_and_retry
+    @limits(calls=50, period=60)
+    def generate_text(self, prompt: str,
+                     temperature: Optional[float] = None,
+                     max_tokens: Optional[int] = None) -> str:
         """Generate text from a prompt with customizable parameters."""
-        endpoint = f"{self.base_url}/generate"
-        payload = {
+        self.call_count += 1
+        params = {
+            "model": "gpt-4" if self.provider == "openai" else "grok-3",
             "prompt": prompt,
-            "max_tokens": max_tokens,
-            "temperature": temperature
+            "temperature": temperature or self.temperature,
+            "max_tokens": max_tokens or self.max_tokens
         }
-
         try:
-            response = requests.post(endpoint, headers=self.headers, json=payload)
-            response.raise_for_status()  # Raise an error for bad status codes
-            result = response.json()
-            generated_text = result.get("text", "No text returned")
+            self.logger.info(f"Sending request {self.call_count}: {prompt[:50]}...")
+            response = self.client.Completion.create(**params)
+            text = response.choices[0].text.strip()
+            self.logger.info(f"Received response for request {self.call_count}")
+            return text
+        except Exception as e:
+            self.logger.error(f"Error in request {self.call_count}: {str(e)}")
+            raise
 
-            # Log the interaction
-            self._log_interaction(prompt, generated_text, max_tokens, temperature)
-            return generated_text
+    @sleep_and_retry
+    @limits(calls=50, period=60)
+    def batch_generate(self, prompts: List[str],
+                      temperature: Optional[float] = None,
+                      max_tokens: Optional[int] = None) -> List[str]:
+        """Process multiple prompts in a batch, respecting rate limits."""
+        results = []
+        self.logger.info(f"Starting batch processing for {len(prompts)} prompts")
+        for i, prompt in enumerate(prompts, 1):
+            try:
+                result = self.generate_text(prompt, temperature, max_tokens)
+                results.append(result)
+                self.logger.info(f"Completed prompt {i}/{len(prompts)}")
+            except Exception as e:
+                self.logger.error(f"Failed prompt {i}: {str(e)}")
+                results.append(f"Error: {str(e)}")
+        self.logger.info(f"Finished batch processing: {len(results)} results")
+        return results
 
-        except requests.exceptions.RequestException as e:
-            error_msg = f"API request failed: {str(e)}"
-            self._log_interaction(prompt, error_msg, max_tokens, temperature, success=False)
-            return error_msg
-
-    def _log_interaction(self, prompt, response, max_tokens, temperature, success=True):
-        """Log each API interaction for debugging or tracking."""
-        log_entry = {
-            "timestamp": datetime.now().isoformat(),
+    def stream_text(self, prompt: str,
+                    temperature: Optional[float] = None,
+                    max_tokens: Optional[int] = None) -> Generator[str, None, None]:
+        """Handle streaming responses for real-time applications."""
+        self.call_count += 1
+        params = {
+            "model": "gpt-4" if self.provider == "openai" else "grok-3",
             "prompt": prompt,
-            "response": response,
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-            "success": success
+            "temperature": temperature or self.temperature,
+            "max_tokens": max_tokens or self.max_tokens,
+            "stream": True if self.provider == "openai" else False
         }
-        self.log.append(log_entry)
-
-    def get_logs(self):
-        """Return the interaction logs."""
-        return self.log
-
-    def clear_logs(self):
-        """Clear the interaction logs."""
-        self.log = []
-
- #Example main
-if __name__ == "__main__":
-    # Replace API key and URL
-    api_key = "your-api-key-here"
-
-    url_base = "https://api.xai.example"
-    llm = LLMSimplifier(api_key, url_base)
-
-    # Generate some text
-    prompt = "Write a haiku about the moon."
-    result = llm.generate_text(prompt, max_tokens=50, temperature=0.9)
-    print("Generated text:", result)
-
-    # Check the logs
-    print("\nInteraction logs:")
-    for entry in llm.get_logs():
-        print(json.dumps(entry, indent=2))
+        try:
+            self.logger.info(f"Streaming request {self.call_count}: {prompt[:50]}...")
+            if self.provider == "openai":
+                response = self.client.Completion.create(**params)
+                for chunk in response:
+                    if chunk.choices and chunk.choices[0].text:
+                        text = chunk.choices[0].text.strip()
+                        self.logger.info(f"Received stream chunk for request {self.call_count}")
+                        yield text
+            else:
+                # Fallback to non-streaming for unsupported providers
+                text = self.generate_text(prompt, temperature, max_tokens)
+                self.logger.info(f"Non-streaming fallback for request {self.call_count}")
+                yield text
+        except Exception as e:
+            self.logger.error(f"Error in streaming request {self.call_count}: {str(e)}")
+            raise
