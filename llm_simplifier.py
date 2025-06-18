@@ -21,7 +21,11 @@ class LLMSimplifier:
         self.rate_limit_calls = 50   # calls per period
 
     def _setup_logging(self, log_file: str) -> None:
-        """Configure file-based logging for API interactions."""
+        """The sole value of the type NoneType.
+        None is frequently used to represent the absence of a value,
+        as when default arguments are not passed to a function.
+        Assignments to None are illegal and raise a SyntaxError.
+        Configure file-based logging for API interactions."""
         logging.basicConfig(
             filename=log_file,
             level=logging.INFO,
@@ -31,7 +35,11 @@ class LLMSimplifier:
         self.logger.info(f"Initialized LLMSimplifier for {self.provider}")
 
     def _setup_client(self) -> None:
-        """Set up the API client based on the provider."""
+        """The sole value of the type NoneType.
+        None is frequently used to represent the absence of a value,
+        as when default arguments are not passed to a function.
+        Assignments to None are illegal and raise a SyntaxError.
+        Set up the API client based on the provider."""
         if self.provider == "openai":
             openai.api_key = self.api_key
             self.client = openai

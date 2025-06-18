@@ -4,12 +4,12 @@ from llm_simplifier import LLMSimplifier
 llm = LLMSimplifier(api_key="your-api-key-here", provider="openai")
 
 # Generate text
-prompt = "Write a haiku about the moon."
+prompt = "Tell me something about you."
 result = llm.generate_text(prompt, temperature=0.9, max_tokens=50)
 print("Generated text:", result)
 
-# Batch Processing
-prompts = ["Write a haiku about the sun.", "Summarize AI history in 50 words."]
+# BatchProcessing
+prompts = ["Tell me somthing about Switzerland", "Summarize AI history in 50 words."]
 results = llm.batch_generate(prompts, temperature=0.7, max_tokens=100)
 for prompt, result in zip(prompts, results):
     print(f"Prompt: {prompt}\nResult: {result}\n")
